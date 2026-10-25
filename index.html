@@ -53,6 +53,7 @@ body {
 }
 button, input, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
+button:disabled { opacity: .4; cursor: default; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 [hidden] { display: none !important; }
 
@@ -119,6 +120,16 @@ button { cursor: pointer; }
 .ex h2 { font: 700 1.35rem/1.15 var(--font-display); margin: 0; overflow-wrap: anywhere; }
 .ex .sets { display: inline-block; margin-top: 4px; font-weight: 600; font-size: .85rem; color: var(--accent); background: var(--accent-soft); border-radius: 6px; padding: 1px 8px; font-variant-numeric: tabular-nums; }
 .ex .notes { color: var(--muted); font-size: .9rem; margin: 6px 0 0; white-space: pre-line; }
+
+/* Variantes : choix de la machine disponible */
+.variants { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }
+.variants .lbl { font-size: .78rem; font-weight: 600; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; margin-right: 2px; }
+.var {
+  border: 1px solid var(--line); background: transparent; border-radius: 999px;
+  padding: 4px 12px; font-weight: 600; font-size: .88rem;
+}
+.var[aria-checked="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+
 .clips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .clip {
   display: inline-flex; align-items: baseline; gap: 8px; border: 1px solid var(--line); background: var(--surface-2);
@@ -140,8 +151,12 @@ button { cursor: pointer; }
 textarea.input { resize: vertical; min-height: 2.6em; }
 .edit-grid { display: grid; gap: 10px; }
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.vared { display: grid; gap: 8px; padding-top: 12px; border-top: 1px dashed var(--line); }
+.vared h3 { font: 700 1.1rem/1.1 var(--font-display); margin: 0; color: var(--muted); letter-spacing: .02em; text-transform: uppercase; }
 .cliped { border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: grid; gap: 8px; background: var(--surface-2); }
 .cliped .input { background: var(--surface); }
+.vidrow { display: grid; grid-template-columns: 72px 1fr; gap: 10px; align-items: end; }
+.thumb { width: 72px; max-width: 100%; aspect-ratio: 16 / 9; border-radius: 4px; object-fit: cover; background: var(--line); display: block; }
 .timebox { display: grid; gap: 4px; }
 .timebox .input { font-variant-numeric: tabular-nums; }
 .pos { font-variant-numeric: tabular-nums; }
@@ -174,24 +189,27 @@ textarea.input { resize: vertical; min-height: 2.6em; }
 <script>
 "use strict";
 
-/* ---------- Données ---------- */
+/* ---------- Données ----------
+   Format v2 :
+   workouts[] → exercises[] → variants[] (une par machine / alternative) → clips[]
+   Chaque extrait a sa propre vidéo, donc une variante peut mélanger plusieurs vidéos.
+*/
 const STORE_KEY = "seances-v1";
+const FORMAT = 2;
 const THEO = "04GJj6XsK-Q";
 
 function seed() {
   const chapters = [[281, 511], [511, 715], [715, 864], [864, 965], [965, 1179], [1179, 1330], [1330, 1516]];
   return {
-    version: 1,
+    version: FORMAT,
     workouts: [{
       id: "fullbody-theo",
       name: "Full body – Théo Leguerrier",
-      notes: "Point de départ : un extrait par chapitre de la vidéo, explications comprises.\nAvec « Modifier », renomme les exercices et découpe des extraits « Réglages » et « Mouvement ».",
+      notes: "Point de départ : un extrait par chapitre de la vidéo, explications comprises.",
       exercises: chapters.map(([s, e], i) => ({
-        id: "ex" + (i + 1),
-        name: "Exercice " + (i + 1),
-        sets: "",
-        notes: "",
-        clips: [{ id: "c" + (i + 1), label: "Chapitre entier", videoId: THEO, start: s, end: e }]
+        id: "ex" + (i + 1), name: "Exercice " + (i + 1), sets: "", notes: "", selected: "vex" + (i + 1),
+        variants: [{ id: "vex" + (i + 1), name: "Exercice " + (i + 1), notes: "",
+          clips: [{ id: "c" + (i + 1), label: "Chapitre entier", videoId: THEO, start: s, end: e }] }]
       }))
     }]
   };
@@ -205,6 +223,13 @@ function save() {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(data)); } catch (e) { /* stockage indisponible */ }
 }
 
+function normClip(c) {
+  c.id = c.id || uid(); c.label = String(c.label || "Extrait"); c.videoId = String(c.videoId || "");
+  c.start = Number(c.start) || 0; c.end = Number(c.end) || 0;
+  return c;
+}
+
+/* Accepte aussi l'ancien format (v1 : extraits directement dans l'exercice). */
 function normalize(d) {
   if (!d || !Array.isArray(d.workouts)) return null;
   d.workouts.forEach(w => {
@@ -212,14 +237,19 @@ function normalize(d) {
     w.exercises = Array.isArray(w.exercises) ? w.exercises : [];
     w.exercises.forEach(x => {
       x.id = x.id || uid(); x.name = String(x.name || "Exercice"); x.sets = String(x.sets || ""); x.notes = String(x.notes || "");
-      x.clips = Array.isArray(x.clips) ? x.clips : [];
-      x.clips.forEach(c => {
-        c.id = c.id || uid(); c.label = String(c.label || "Extrait"); c.videoId = String(c.videoId || "");
-        c.start = Number(c.start) || 0; c.end = Number(c.end) || 0;
+      if (!Array.isArray(x.variants)) {
+        x.variants = [{ id: "v" + x.id, name: x.name, notes: "", clips: Array.isArray(x.clips) ? x.clips : [] }];
+      }
+      delete x.clips;
+      if (!x.variants.length) x.variants.push({ id: uid(), name: x.name, notes: "", clips: [] });
+      x.variants.forEach(v => {
+        v.id = v.id || uid(); v.name = String(v.name || x.name); v.notes = String(v.notes || "");
+        v.clips = Array.isArray(v.clips) ? v.clips.map(normClip) : [];
       });
+      if (!x.variants.some(v => v.id === x.selected)) x.selected = x.variants[0].id;
     });
   });
-  d.version = 1;
+  d.version = FORMAT;
   return d;
 }
 
@@ -291,6 +321,10 @@ function arm(key) {
 }
 function currentWorkout() { return data.workouts.find(w => w.id === ui.workoutId) || null; }
 function findExercise(w, exId) { return w.exercises.find(x => x.id === exId); }
+function selectedVariant(x) { return x.variants.find(v => v.id === x.selected) || x.variants[0]; }
+function clipTitle(x, v, c) {
+  return x.name + (x.variants.length > 1 ? " (" + v.name + ")" : "") + " — " + c.label;
+}
 
 /* ---------- Lecteur YouTube ---------- */
 let ytReady = null, player = null, playerReady = false;
@@ -421,7 +455,8 @@ function renderHome() {
   document.title = "Mes séances";
   $top.innerHTML = '<h1>Mes séances</h1>';
   const cards = data.workouts.map(w => {
-    const nx = w.exercises.length, nc = w.exercises.reduce((a, x) => a + x.clips.length, 0);
+    const nx = w.exercises.length;
+    const nc = w.exercises.reduce((a, x) => a + x.variants.reduce((b, v) => b + v.clips.length, 0), 0);
     return '<button class="wcard" data-action="open" data-id="' + esc(w.id) + '"><div><div class="name">' + esc(w.name) +
       '</div><div class="meta">' + nx + " exercice" + (nx > 1 ? "s" : "") + " · " + nc + " extrait" + (nc > 1 ? "s" : "") +
       '</div></div><span class="go" aria-hidden="true">›</span></button>';
@@ -434,10 +469,10 @@ function renderHome() {
     '<div class="row"><button class="btn" data-action="export">Exporter</button><button class="btn" data-action="copy">Copier</button><button class="btn" data-action="import">Importer un fichier</button></div></div>';
 }
 
-function clipButton(x, c) {
+function clipButton(x, v, c) {
   const dur = c.end > c.start ? fmt(c.end - c.start) : "";
   const active = playback.clip && playback.clip.id === c.id ? " active" : "";
-  return '<button class="clip' + active + '" data-action="play" data-ex="' + esc(x.id) + '" data-clip="' + esc(c.id) + '"><b>▶ ' + esc(c.label) +
+  return '<button class="clip' + active + '" data-action="play" data-clip="' + esc(c.id) + '"><b>▶ ' + esc(c.label) +
     '</b><span>' + fmt(c.start) + (dur ? " · " + dur : "") + "</span></button>";
 }
 
@@ -452,43 +487,67 @@ function renderWorkout(w) {
 
 function viewWorkoutHTML(w) {
   const items = w.exercises.map((x, i) => {
-    const all = x.clips.length > 1 ? '<button class="clip all" data-action="play-all" data-ex="' + esc(x.id) + '"><b>Tout enchaîner</b></button>' : "";
-    return '<li class="ex"><div class="num">' + (i + 1) + '</div><div class="body"><h2>' + esc(x.name) + "</h2>" +
+    const v = selectedVariant(x);
+    const chooser = x.variants.length > 1
+      ? '<div class="variants" role="radiogroup" aria-label="Variante"><span class="lbl">Variante</span>' +
+        x.variants.map(o => '<button class="var" role="radio" aria-checked="' + (o.id === v.id) + '" data-action="pick-var" data-var="' + esc(o.id) + '">' + esc(o.name) + "</button>").join("") +
+        "</div>"
+      : "";
+    const all = v.clips.length > 1 ? '<button class="clip all" data-action="play-all"><b>Tout enchaîner</b></button>' : "";
+    return '<li class="ex" data-ex="' + esc(x.id) + '"><div class="num">' + (i + 1) + '</div><div class="body"><h2>' + esc(x.name) + "</h2>" +
       (x.sets ? '<span class="sets">' + esc(x.sets) + "</span>" : "") +
       (x.notes ? '<p class="notes">' + esc(x.notes) + "</p>" : "") +
-      '<div class="clips">' + x.clips.map(c => clipButton(x, c)).join("") + all + "</div>" +
-      (x.clips.length ? "" : '<div class="hint">Pas encore d\'extrait. Ajoute-en un avec « Modifier ».</div>') +
-      "</div></li>";
+      chooser +
+      '<div data-var="' + esc(v.id) + '">' +
+      (v.notes ? '<p class="notes">' + esc(v.notes) + "</p>" : "") +
+      '<div class="clips">' + v.clips.map(c => clipButton(x, v, c)).join("") + all + "</div>" +
+      (v.clips.length ? "" : '<div class="hint">Pas encore d\'extrait pour cette variante. Ajoute-en un avec « Modifier ».</div>') +
+      "</div></div></li>";
   }).join("");
   return (w.notes ? '<p class="wnotes">' + esc(w.notes) + "</p>" : "") +
     (items ? '<ol class="exlist">' + items + "</ol>" : '<div class="panel"><p>Aucun exercice. Appuie sur « Modifier » pour en ajouter.</p></div>');
+}
+
+function clipEditorHTML(c) {
+  const cDel = "c:" + c.id;
+  const thumb = c.videoId ? '<img class="thumb" alt="" loading="lazy" src="https://i.ytimg.com/vi/' + esc(c.videoId) + '/mqdefault.jpg">' : '<span class="thumb"></span>';
+  return '<div class="cliped" data-clip="' + esc(c.id) + '">' +
+    '<label class="field"><span>Nom de l\'extrait</span><input class="input" id="lab-' + esc(c.id) + '" data-field="label" value="' + esc(c.label) + '"></label>' +
+    '<div class="vidrow">' + thumb +
+    '<label class="field"><span>Vidéo YouTube (lien ou identifiant)</span><input class="input" id="vid-' + esc(c.id) + '" data-field="video" value="' + esc(c.videoId) + '" inputmode="url" autocomplete="off" placeholder="Colle un lien YouTube"></label></div>' +
+    '<div class="two">' +
+    '<div class="timebox"><label class="field"><span>Début</span><input class="input" id="st-' + esc(c.id) + '" data-field="start" value="' + fmt(c.start) + '" inputmode="decimal"></label>' +
+    '<button class="btn small" data-action="take-start">Prendre la position <span class="pos" data-livepos>–:––</span></button></div>' +
+    '<div class="timebox"><label class="field"><span>Fin</span><input class="input" id="en-' + esc(c.id) + '" data-field="end" value="' + fmt(c.end) + '" inputmode="decimal"></label>' +
+    '<button class="btn small" data-action="take-end">Prendre la position <span class="pos" data-livepos>–:––</span></button></div>' +
+    "</div>" +
+    '<div class="editbar"><div class="row"><button class="btn small" data-action="cue">Charger la vidéo ici</button><button class="btn small" data-action="test">▶ Tester</button></div>' +
+    '<button class="btn small danger' + (ui.armed === cDel ? " armed" : "") + '" data-action="del-clip">' + (ui.armed === cDel ? "Confirmer" : "Supprimer") + "</button></div>" +
+    "</div>";
 }
 
 function editWorkoutHTML(w) {
   const delKey = "w:" + w.id;
   const exs = w.exercises.map((x, i) => {
     const xDel = "x:" + x.id;
-    const clips = x.clips.map(c => {
-      const cDel = "c:" + c.id;
-      return '<div class="cliped" data-ex="' + esc(x.id) + '" data-clip="' + esc(c.id) + '">' +
-        '<label class="field"><span>Nom de l\'extrait</span><input class="input" id="lab-' + esc(c.id) + '" data-field="label" value="' + esc(c.label) + '"></label>' +
-        '<label class="field"><span>Vidéo YouTube (lien ou identifiant)</span><input class="input" id="vid-' + esc(c.id) + '" data-field="video" value="' + esc(c.videoId) + '" inputmode="url" autocomplete="off"></label>' +
-        '<div class="two">' +
-        '<div class="timebox"><label class="field"><span>Début</span><input class="input" id="st-' + esc(c.id) + '" data-field="start" value="' + fmt(c.start) + '" inputmode="decimal"></label>' +
-        '<button class="btn small" data-action="take-start">Prendre la position <span class="pos" data-livepos>–:––</span></button></div>' +
-        '<div class="timebox"><label class="field"><span>Fin</span><input class="input" id="en-' + esc(c.id) + '" data-field="end" value="' + fmt(c.end) + '" inputmode="decimal"></label>' +
-        '<button class="btn small" data-action="take-end">Prendre la position <span class="pos" data-livepos>–:––</span></button></div>' +
-        "</div>" +
-        '<div class="editbar"><div class="row"><button class="btn small" data-action="cue">Charger la vidéo ici</button><button class="btn small" data-action="test">▶ Tester</button></div>' +
-        '<button class="btn small danger' + (ui.armed === cDel ? " armed" : "") + '" data-action="del-clip">' + (ui.armed === cDel ? "Confirmer" : "Supprimer") + "</button></div>" +
-        "</div>";
+    const multi = x.variants.length > 1;
+    const vars = x.variants.map((v, vi) => {
+      const vDel = "v:" + v.id;
+      return '<div class="vared" data-var="' + esc(v.id) + '">' +
+        '<h3>' + (multi ? "Variante " + (vi + 1) : "Extraits") + "</h3>" +
+        (multi ? '<label class="field"><span>Nom de la variante (machine, alternative…)</span><input class="input" id="vn-' + esc(v.id) + '" data-field="vname" value="' + esc(v.name) + '"></label>' +
+                 '<label class="field"><span>Notes de la variante</span><textarea class="input" id="vo-' + esc(v.id) + '" data-field="vnotes" rows="1">' + esc(v.notes) + "</textarea></label>" : "") +
+        v.clips.map(clipEditorHTML).join("") +
+        '<div class="editbar"><button class="btn small" data-action="add-clip">＋ Extrait</button>' +
+        (multi ? '<button class="btn small danger' + (ui.armed === vDel ? " armed" : "") + '" data-action="del-var">' + (ui.armed === vDel ? "Confirmer" : "Supprimer la variante") + "</button>" : "") +
+        "</div></div>";
     }).join("");
     return '<li class="ex" data-ex="' + esc(x.id) + '"><div class="num">' + (i + 1) + '</div><div class="body edit-grid">' +
       '<label class="field"><span>Exercice</span><input class="input" id="xn-' + esc(x.id) + '" data-field="xname" value="' + esc(x.name) + '"></label>' +
       '<label class="field"><span>Séries × répétitions</span><input class="input" id="xs-' + esc(x.id) + '" data-field="xsets" value="' + esc(x.sets) + '" placeholder="ex. 3 × 8–12, repos 2 min"></label>' +
       '<label class="field"><span>Notes</span><textarea class="input" id="xo-' + esc(x.id) + '" data-field="xnotes" rows="2" placeholder="Réglage du siège, charge utilisée…">' + esc(x.notes) + "</textarea></label>" +
-      clips +
-      '<div class="editbar"><div class="row"><button class="btn small" data-action="add-clip">＋ Extrait</button>' +
+      vars +
+      '<div class="editbar"><div class="row"><button class="btn small" data-action="add-var">＋ Variante (autre machine)</button>' +
       '<button class="btn small ghost" data-action="move-up"' + (i === 0 ? " disabled" : "") + ' aria-label="Monter">↑</button>' +
       '<button class="btn small ghost" data-action="move-down"' + (i === w.exercises.length - 1 ? " disabled" : "") + ' aria-label="Descendre">↓</button></div>' +
       '<button class="btn small danger' + (ui.armed === xDel ? " armed" : "") + '" data-action="del-ex">' + (ui.armed === xDel ? "Confirmer" : "Supprimer l'exercice") + "</button></div>" +
@@ -497,7 +556,7 @@ function editWorkoutHTML(w) {
   return '<div class="panel edit-grid" style="margin-bottom:10px">' +
     '<label class="field"><span>Nom de l\'entraînement</span><input class="input" id="wn" data-field="wname" value="' + esc(w.name) + '"></label>' +
     '<label class="field"><span>Notes</span><textarea class="input" id="wo" data-field="wnotes" rows="2">' + esc(w.notes) + "</textarea></label>" +
-    '<p style="margin:0">Pour trouver un minutage : « Charger la vidéo ici », avance dans le lecteur jusqu\'au bon moment, puis « Prendre la position ».</p>' +
+    '<p style="margin:0">Pour trouver un minutage : « Charger la vidéo ici », avance dans le lecteur jusqu\'au bon moment, puis « Prendre la position ». Chaque extrait peut venir d\'une vidéo différente : colle simplement son lien.</p>' +
     "</div>" +
     '<ol class="exlist">' + exs + "</ol>" +
     '<div class="addrow"><button class="btn primary" data-action="add-ex">＋ Ajouter un exercice</button><button class="btn" data-action="dup-workout">Dupliquer l\'entraînement</button>' +
@@ -507,22 +566,31 @@ function editWorkoutHTML(w) {
 /* ---------- Actions ---------- */
 function lastVideoId(w) {
   for (let i = w.exercises.length - 1; i >= 0; i--) {
-    const cs = w.exercises[i].clips;
-    for (let j = cs.length - 1; j >= 0; j--) if (cs[j].videoId) return cs[j].videoId;
+    for (const v of [...w.exercises[i].variants].reverse()) {
+      for (let j = v.clips.length - 1; j >= 0; j--) if (v.clips[j].videoId) return v.clips[j].videoId;
+    }
   }
   return "";
 }
 
 function exportJSON() { return JSON.stringify(data, null, 2); }
 
+function context(el) {
+  const w = currentWorkout();
+  const exEl = el.closest("[data-ex]");
+  const x = w && exEl ? findExercise(w, exEl.dataset.ex) : null;
+  const varEl = el.closest("[data-var]");
+  const v = x && varEl ? x.variants.find(k => k.id === varEl.dataset.var) : null;
+  const clipEl = el.closest("[data-clip]");
+  const c = v && clipEl ? v.clips.find(k => k.id === clipEl.dataset.clip) : null;
+  return { w, x, v, c };
+}
+
 document.addEventListener("click", async ev => {
   const b = ev.target.closest("[data-action]");
   if (!b) return;
   const a = b.dataset.action;
-  const w = currentWorkout();
-  const exEl = b.closest("[data-ex]"), clipEl = b.closest("[data-clip]");
-  const x = w && exEl ? findExercise(w, exEl.dataset.ex) : null;
-  const c = x && clipEl ? x.clips.find(k => k.id === clipEl.dataset.clip) : null;
+  const { w, x, v, c } = context(b);
 
   switch (a) {
     case "open": ui.view = "workout"; ui.workoutId = b.dataset.id; ui.editing = false; render(); window.scrollTo(0, 0); break;
@@ -535,12 +603,12 @@ document.addEventListener("click", async ev => {
       document.getElementById("wn")?.select();
       break;
     }
-    case "play": if (c) startClip(c, x.name + " — " + c.label, []); break;
-    case "play-all": if (x && x.clips.length) {
-      const q = x.clips.map(k => ({ clip: k, label: x.name + " — " + k.label }));
+    case "pick-var": if (x) { x.selected = b.dataset.var; save(); render(); } break;
+    case "play": case "test": if (c) startClip(c, clipTitle(x, v, c), []); break;
+    case "play-all": if (v && v.clips.length) {
+      const q = v.clips.map(k => ({ clip: k, label: clipTitle(x, v, k) }));
       const first = q.shift(); startClip(first.clip, first.label, q);
     } break;
-    case "test": if (c) startClip(c, x.name + " — " + c.label, []); break;
     case "cue": if (c) {
       if (!c.videoId) { toast("Indique d'abord la vidéo YouTube."); break; }
       cueFree(c.videoId, c.start); window.scrollTo({ top: 0, behavior: "smooth" });
@@ -553,21 +621,35 @@ document.addEventListener("click", async ev => {
       if (a === "take-start") c.start = Math.floor(t); else c.end = Math.ceil(t);
       save(); render(); toast((a === "take-start" ? "Début" : "Fin") + " : " + fmt(a === "take-start" ? c.start : c.end));
     } break;
-    case "add-clip": if (x) {
-      const prev = x.clips[x.clips.length - 1];
+    case "add-clip": if (v) {
+      const prev = v.clips[v.clips.length - 1];
       const vid = prev ? prev.videoId : lastVideoId(w);
       const st = prev ? prev.end : 0;
-      x.clips.push({ id: uid(), label: x.clips.length === 0 ? "Réglages" : "Mouvement", videoId: vid, start: st, end: st + 30 });
+      v.clips.push({ id: uid(), label: v.clips.length === 0 ? "Réglages" : "Mouvement", videoId: vid, start: st, end: st + 30 });
       save(); render();
     } break;
     case "del-clip": if (c) {
       if (ui.armed !== "c:" + c.id) { arm("c:" + c.id); render(); break; }
       if (playback.clip && playback.clip.id === c.id) stopPlayback();
-      x.clips = x.clips.filter(k => k.id !== c.id); ui.armed = null; save(); render();
+      v.clips = v.clips.filter(k => k.id !== c.id); ui.armed = null; save(); render();
+    } break;
+    case "add-var": if (x) {
+      if (x.variants.length === 1 && x.variants[0].name === x.name) x.variants[0].name = "Variante 1";
+      const nv = { id: uid(), name: "Variante " + (x.variants.length + 1), notes: "", clips: [] };
+      x.variants.push(nv); save(); render();
+      const inp = document.getElementById("vn-" + nv.id); if (inp) { inp.scrollIntoView({ block: "center" }); inp.select(); }
+    } break;
+    case "del-var": if (v && x.variants.length > 1) {
+      if (ui.armed !== "v:" + v.id) { arm("v:" + v.id); render(); break; }
+      if (playback.clip && v.clips.some(k => k.id === playback.clip.id)) stopPlayback();
+      x.variants = x.variants.filter(k => k !== v);
+      if (x.selected === v.id) x.selected = x.variants[0].id;
+      ui.armed = null; save(); render();
     } break;
     case "add-ex": if (w) {
       const vid = lastVideoId(w);
-      w.exercises.push({ id: uid(), name: "Nouvel exercice", sets: "", notes: "", clips: vid ? [{ id: uid(), label: "Mouvement", videoId: vid, start: 0, end: 30 }] : [] });
+      const nv = { id: uid(), name: "Nouvel exercice", notes: "", clips: vid ? [{ id: uid(), label: "Mouvement", videoId: vid, start: 0, end: 30 }] : [] };
+      w.exercises.push({ id: uid(), name: "Nouvel exercice", sets: "", notes: "", selected: nv.id, variants: [nv] });
       save(); render();
       const last = w.exercises[w.exercises.length - 1];
       const inp = document.getElementById("xn-" + last.id); if (inp) { inp.scrollIntoView({ block: "center" }); inp.select(); }
@@ -583,7 +665,13 @@ document.addEventListener("click", async ev => {
     case "dup-workout": if (w) {
       const copy = JSON.parse(JSON.stringify(w));
       copy.id = uid(); copy.name = w.name + " (copie)";
-      copy.exercises.forEach(k => { k.id = uid(); k.clips.forEach(cc => { cc.id = uid(); }); });
+      copy.exercises.forEach(k => {
+        k.id = uid();
+        k.variants.forEach(vv => {
+          const nid = uid(); if (k.selected === vv.id) k.selected = nid; vv.id = nid;
+          vv.clips.forEach(cc => { cc.id = uid(); });
+        });
+      });
       data.workouts.splice(data.workouts.indexOf(w) + 1, 0, copy); save();
       ui.workoutId = copy.id; render(); window.scrollTo(0, 0); toast("Entraînement dupliqué");
     } break;
@@ -632,14 +720,22 @@ document.addEventListener("change", ev => {
   const el = ev.target;
   const f = el.dataset && el.dataset.field;
   if (!f) return;
-  const w = currentWorkout(); if (!w) return;
+  const { w, x, v, c } = context(el);
+  if (!w) return;
   if (f === "wname") { w.name = el.value.trim() || "Sans nom"; save(); render(); return; }
   if (f === "wnotes") { w.notes = el.value; save(); return; }
-  const exEl = el.closest("[data-ex]"); const x = exEl && findExercise(w, exEl.dataset.ex); if (!x) return;
-  if (f === "xname") { x.name = el.value.trim() || "Exercice"; save(); return; }
+  if (!x) return;
+  if (f === "xname") {
+    const old = x.name; x.name = el.value.trim() || "Exercice";
+    if (x.variants.length === 1 && x.variants[0].name === old) x.variants[0].name = x.name;
+    save(); return;
+  }
   if (f === "xsets") { x.sets = el.value.trim(); save(); return; }
   if (f === "xnotes") { x.notes = el.value; save(); return; }
-  const clipEl = el.closest("[data-clip]"); const c = clipEl && x.clips.find(k => k.id === clipEl.dataset.clip); if (!c) return;
+  if (!v) return;
+  if (f === "vname") { v.name = el.value.trim() || "Variante"; save(); return; }
+  if (f === "vnotes") { v.notes = el.value; save(); return; }
+  if (!c) return;
   if (f === "label") { c.label = el.value.trim() || "Extrait"; save(); return; }
   if (f === "video") {
     const yt = parseYouTube(el.value);
@@ -649,9 +745,9 @@ document.addEventListener("change", ev => {
     save(); render(); return;
   }
   if (f === "start" || f === "end") {
-    const v = parseTime(el.value);
-    if (isNaN(v)) { toast("Format attendu : 4:41 ou 1:02:30"); el.value = fmt(c[f]); return; }
-    c[f] = v; save(); el.value = fmt(v);
+    const val = parseTime(el.value);
+    if (isNaN(val)) { toast("Format attendu : 4:41 ou 1:02:30"); el.value = fmt(c[f]); return; }
+    c[f] = val; save(); el.value = fmt(val);
     if (c.end <= c.start) toast("La fin doit être après le début.");
   }
 });
