@@ -140,6 +140,20 @@ button:disabled { opacity: .4; cursor: default; }
 .clip.active { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .clip.active span { color: inherit; opacity: .85; }
 .clip.all { background: transparent; border-style: dashed; }
+a.clip { color: inherit; text-decoration: none; }
+a.clip .yt { font-size: .75rem; font-weight: 600; color: var(--muted); letter-spacing: .03em; }
+
+/* Interrupteur de mode de lecture */
+.modebar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; margin: 0 0 12px; }
+.modebar .desc { color: var(--muted); font-size: .88rem; flex: 1 1 14rem; min-width: 0; }
+.switch { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; font-size: .95rem; cursor: pointer; user-select: none; }
+.switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.switch .track { width: 44px; height: 26px; border-radius: 999px; background: var(--line); position: relative; flex: none; }
+.switch .track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 2px rgba(0,0,0,.25); }
+.switch input:checked + .track { background: var(--accent); }
+.switch input:checked + .track::after { transform: translateX(18px); }
+.switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: no-preference) { .switch .track, .switch .track::after { transition: background .15s, transform .15s; } }
 .hint { color: var(--muted); font-size: .88rem; margin-top: 8px; }
 
 /* Édition */
@@ -312,6 +326,13 @@ function toast(msg) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, 2600);
 }
 
+/* ---------- Préférences de cet appareil ---------- */
+const PREFS_KEY = "seances-prefs";
+const prefs = { inline: false };   // false = ouvrir dans YouTube (défaut), true = lecteur dans la page
+try { Object.assign(prefs, JSON.parse(localStorage.getItem(PREFS_KEY) || "{}")); } catch (e) { /* ignore */ }
+function savePrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch (e) { /* ignore */ } }
+function youtubeUrl(c) { return "https://www.youtube.com/watch?v=" + encodeURIComponent(c.videoId) + "&t=" + Math.floor(c.start) + "s"; }
+
 /* ---------- État de l'interface ---------- */
 const ui = { view: "home", workoutId: null, editing: false, armed: null };
 let armTimer;
@@ -471,13 +492,20 @@ function renderHome() {
 
 function clipButton(x, v, c) {
   const dur = c.end > c.start ? fmt(c.end - c.start) : "";
+  if (!prefs.inline) {
+    if (!c.videoId) return '<span class="clip"><b>' + esc(c.label) + '</b><span>pas de vidéo</span></span>';
+    const range = fmt(c.start) + (c.end > c.start ? " → " + fmt(c.end) : "");
+    return '<a class="clip" href="' + esc(youtubeUrl(c)) + '" target="_blank" rel="noopener" data-clip="' + esc(c.id) + '"><b>▶ ' + esc(c.label) +
+      '</b><span>' + range + "</span></a>";
+  }
   const active = playback.clip && playback.clip.id === c.id ? " active" : "";
   return '<button class="clip' + active + '" data-action="play" data-clip="' + esc(c.id) + '"><b>▶ ' + esc(c.label) +
     '</b><span>' + fmt(c.start) + (dur ? " · " + dur : "") + "</span></button>";
 }
 
 function renderWorkout(w) {
-  $playerWrap.hidden = false;
+  // En édition, le lecteur reste disponible pour « Prendre la position ».
+  $playerWrap.hidden = !(ui.editing || prefs.inline);
   document.title = w.name;
   $top.innerHTML = '<button class="back" data-action="home">‹ Séances</button><h1>' + esc(w.name) + '</h1>' +
     '<button class="btn ' + (ui.editing ? "primary" : "") + '" data-action="toggle-edit">' + (ui.editing ? "Terminé" : "Modifier") + "</button>";
@@ -493,7 +521,7 @@ function viewWorkoutHTML(w) {
         x.variants.map(o => '<button class="var" role="radio" aria-checked="' + (o.id === v.id) + '" data-action="pick-var" data-var="' + esc(o.id) + '">' + esc(o.name) + "</button>").join("") +
         "</div>"
       : "";
-    const all = v.clips.length > 1 ? '<button class="clip all" data-action="play-all"><b>Tout enchaîner</b></button>' : "";
+    const all = prefs.inline && v.clips.length > 1 ? '<button class="clip all" data-action="play-all"><b>Tout enchaîner</b></button>' : "";
     return '<li class="ex" data-ex="' + esc(x.id) + '"><div class="num">' + (i + 1) + '</div><div class="body"><h2>' + esc(x.name) + "</h2>" +
       (x.sets ? '<span class="sets">' + esc(x.sets) + "</span>" : "") +
       (x.notes ? '<p class="notes">' + esc(x.notes) + "</p>" : "") +
@@ -504,7 +532,11 @@ function viewWorkoutHTML(w) {
       (v.clips.length ? "" : '<div class="hint">Pas encore d\'extrait pour cette variante. Ajoute-en un avec « Modifier ».</div>') +
       "</div></div></li>";
   }).join("");
-  return (w.notes ? '<p class="wnotes">' + esc(w.notes) + "</p>" : "") +
+  const modebar = '<div class="modebar"><span class="desc">' +
+    (prefs.inline ? "Les extraits se lisent ici et s'arrêtent tout seuls." : "Les extraits s'ouvrent dans l'appli YouTube au bon moment. Mets pause à la fin indiquée.") +
+    '</span><label class="switch"><input type="checkbox" role="switch" id="inlineToggle"' + (prefs.inline ? " checked" : "") +
+    '><span class="track" aria-hidden="true"></span>Lecteur dans la page</label></div>';
+  return (w.notes ? '<p class="wnotes">' + esc(w.notes) + "</p>" : "") + modebar +
     (items ? '<ol class="exlist">' + items + "</ol>" : '<div class="panel"><p>Aucun exercice. Appuie sur « Modifier » pour en ajouter.</p></div>');
 }
 
@@ -595,7 +627,10 @@ document.addEventListener("click", async ev => {
   switch (a) {
     case "open": ui.view = "workout"; ui.workoutId = b.dataset.id; ui.editing = false; render(); window.scrollTo(0, 0); break;
     case "home": stopPlayback(); ui.view = "home"; ui.editing = false; render(); window.scrollTo(0, 0); break;
-    case "toggle-edit": ui.editing = !ui.editing; ui.armed = null; render(); break;
+    case "toggle-edit":
+      ui.editing = !ui.editing; ui.armed = null;
+      if (!ui.editing && !prefs.inline) stopPlayback();
+      render(); break;
     case "new-workout": {
       const nw = { id: uid(), name: "Nouvel entraînement", notes: "", exercises: [] };
       data.workouts.push(nw); save();
@@ -718,6 +753,11 @@ document.getElementById("importFile").addEventListener("change", async ev => {
 
 document.addEventListener("change", ev => {
   const el = ev.target;
+  if (el.id === "inlineToggle") {
+    prefs.inline = el.checked; savePrefs();
+    if (!prefs.inline) stopPlayback();
+    render(); return;
+  }
   const f = el.dataset && el.dataset.field;
   if (!f) return;
   const { w, x, v, c } = context(el);
