@@ -504,13 +504,25 @@ function clipButton(x, v, c) {
 }
 
 function renderWorkout(w) {
-  // En édition, le lecteur reste disponible pour « Prendre la position ».
-  $playerWrap.hidden = !(ui.editing || prefs.inline);
+  $playerWrap.hidden = !prefs.inline;
   document.title = w.name;
   $top.innerHTML = '<button class="back" data-action="home">‹ Séances</button><h1>' + esc(w.name) + '</h1>' +
     '<button class="btn ' + (ui.editing ? "primary" : "") + '" data-action="toggle-edit">' + (ui.editing ? "Terminé" : "Modifier") + "</button>";
   $view.innerHTML = ui.editing ? editWorkoutHTML(w) : viewWorkoutHTML(w);
   updateNowbar(); markActive();
+}
+
+function modebarHTML() {
+  let desc;
+  if (ui.editing) desc = prefs.inline
+    ? "« Charger la vidéo ici », avance jusqu'au bon moment, puis « Prendre la position »."
+    : "Active le lecteur pour régler les minutages en avançant dans la vidéo.";
+  else desc = prefs.inline
+    ? "Les extraits se lisent ici et s'arrêtent tout seuls."
+    : "Les extraits s'ouvrent dans l'appli YouTube au bon moment. Mets pause à la fin indiquée.";
+  return '<div class="modebar"><span class="desc">' + desc +
+    '</span><label class="switch"><input type="checkbox" role="switch" id="inlineToggle"' + (prefs.inline ? " checked" : "") +
+    '><span class="track" aria-hidden="true"></span>Lecteur dans la page</label></div>';
 }
 
 function viewWorkoutHTML(w) {
@@ -532,11 +544,7 @@ function viewWorkoutHTML(w) {
       (v.clips.length ? "" : '<div class="hint">Pas encore d\'extrait pour cette variante. Ajoute-en un avec « Modifier ».</div>') +
       "</div></div></li>";
   }).join("");
-  const modebar = '<div class="modebar"><span class="desc">' +
-    (prefs.inline ? "Les extraits se lisent ici et s'arrêtent tout seuls." : "Les extraits s'ouvrent dans l'appli YouTube au bon moment. Mets pause à la fin indiquée.") +
-    '</span><label class="switch"><input type="checkbox" role="switch" id="inlineToggle"' + (prefs.inline ? " checked" : "") +
-    '><span class="track" aria-hidden="true"></span>Lecteur dans la page</label></div>';
-  return (w.notes ? '<p class="wnotes">' + esc(w.notes) + "</p>" : "") + modebar +
+  return (w.notes ? '<p class="wnotes">' + esc(w.notes) + "</p>" : "") + modebarHTML() +
     (items ? '<ol class="exlist">' + items + "</ol>" : '<div class="panel"><p>Aucun exercice. Appuie sur « Modifier » pour en ajouter.</p></div>');
 }
 
@@ -549,11 +557,15 @@ function clipEditorHTML(c) {
     '<label class="field"><span>Vidéo YouTube (lien ou identifiant)</span><input class="input" id="vid-' + esc(c.id) + '" data-field="video" value="' + esc(c.videoId) + '" inputmode="url" autocomplete="off" placeholder="Colle un lien YouTube"></label></div>' +
     '<div class="two">' +
     '<div class="timebox"><label class="field"><span>Début</span><input class="input" id="st-' + esc(c.id) + '" data-field="start" value="' + fmt(c.start) + '" inputmode="decimal"></label>' +
-    '<button class="btn small" data-action="take-start">Prendre la position <span class="pos" data-livepos>–:––</span></button></div>' +
+    (prefs.inline ? '<button class="btn small" data-action="take-start">Prendre la position <span class="pos" data-livepos>–:––</span></button>' : "") + "</div>" +
     '<div class="timebox"><label class="field"><span>Fin</span><input class="input" id="en-' + esc(c.id) + '" data-field="end" value="' + fmt(c.end) + '" inputmode="decimal"></label>' +
-    '<button class="btn small" data-action="take-end">Prendre la position <span class="pos" data-livepos>–:––</span></button></div>' +
+    (prefs.inline ? '<button class="btn small" data-action="take-end">Prendre la position <span class="pos" data-livepos>–:––</span></button>' : "") + "</div>" +
     "</div>" +
-    '<div class="editbar"><div class="row"><button class="btn small" data-action="cue">Charger la vidéo ici</button><button class="btn small" data-action="test">▶ Tester</button></div>' +
+    '<div class="editbar"><div class="row">' +
+    (prefs.inline
+      ? '<button class="btn small" data-action="cue">Charger la vidéo ici</button><button class="btn small" data-action="test">▶ Tester</button>'
+      : (c.videoId ? '<a class="btn small" href="' + esc(youtubeUrl(c)) + '" target="_blank" rel="noopener" style="text-decoration:none">▶ Tester dans YouTube</a>' : "")) +
+    "</div>" +
     '<button class="btn small danger' + (ui.armed === cDel ? " armed" : "") + '" data-action="del-clip">' + (ui.armed === cDel ? "Confirmer" : "Supprimer") + "</button></div>" +
     "</div>";
 }
@@ -585,10 +597,11 @@ function editWorkoutHTML(w) {
       '<button class="btn small danger' + (ui.armed === xDel ? " armed" : "") + '" data-action="del-ex">' + (ui.armed === xDel ? "Confirmer" : "Supprimer l'exercice") + "</button></div>" +
       "</div></li>";
   }).join("");
-  return '<div class="panel edit-grid" style="margin-bottom:10px">' +
+  return modebarHTML() +
+    '<div class="panel edit-grid" style="margin-bottom:10px">' +
     '<label class="field"><span>Nom de l\'entraînement</span><input class="input" id="wn" data-field="wname" value="' + esc(w.name) + '"></label>' +
     '<label class="field"><span>Notes</span><textarea class="input" id="wo" data-field="wnotes" rows="2">' + esc(w.notes) + "</textarea></label>" +
-    '<p style="margin:0">Pour trouver un minutage : « Charger la vidéo ici », avance dans le lecteur jusqu\'au bon moment, puis « Prendre la position ». Chaque extrait peut venir d\'une vidéo différente : colle simplement son lien.</p>' +
+    '<p style="margin:0">Chaque extrait peut venir d\'une vidéo différente : colle simplement son lien.</p>' +
     "</div>" +
     '<ol class="exlist">' + exs + "</ol>" +
     '<div class="addrow"><button class="btn primary" data-action="add-ex">＋ Ajouter un exercice</button><button class="btn" data-action="dup-workout">Dupliquer l\'entraînement</button>' +
